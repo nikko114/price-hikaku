@@ -1,0 +1,10 @@
+{
+  "name": "price-hikaku",
+  "private": true,
+  "description": "お店ごとの値段と量を記録して、単価で比べるアプリ",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "serve": "python3 -m http.server 8000"
+  }
+}

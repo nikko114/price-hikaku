@@ -1,6 +1,11 @@
 # price-hikaku 実装計画
 
-> ステータス: 計画（実装前）／ 作成: 2026-11-01
+> 作成: 2026-11-01
+>
+> **進捗**
+> - ✅ Phase 0（土台）・Phase 1（MVP）: 実装済み（v0.1.0）。Phase 4 の単価電卓も前倒しで実装
+> - ⏳ 次: 実機（iPhone）で確認 → Phase 2（位置情報）→ Phase 3（グラフ）→ Phase 4
+> - 決まったこと: 14章の案はすべて OK。グラフは外部ライブラリを使ってもよい
 
 ## 0. ひとことで
 
@@ -368,39 +373,48 @@ iPhone のクセ対策:
 price-hikaku/
 ├── index.html              # 1ページだけ（中身は JS で切り替え）
 ├── manifest.webmanifest
-├── sw.js                   # Service Worker
+├── sw.js                   # Service Worker（ASSETS と VERSION を管理）
 ├── .nojekyll               # GitHub Pages の Jekyll 処理を無効化
+├── package.json            # npm test 用（依存なし）
 ├── css/
 │   └── style.css           # 色・余白は CSS 変数、ライト/ダーク
 ├── js/
-│   ├── app.js              # 起動、タブ、ルーター
-│   ├── db.js               # localStorage / IndexedDB、スキーマ移行
-│   ├── state.js            # メモリ上のデータと変更通知
+│   ├── app.js              # 起動、画面の対応表、Service Worker の登録
+│   ├── router.js           # ハッシュでの画面切り替え・戻る
+│   ├── state.js            # メモリ上のデータ、保存、変更通知
+│   ├── db.js               # localStorage / IndexedDB
+│   ├── defaults.js         # 初期設定・カテゴリ
 │   ├── units.js            # 単位換算・税・単価計算（純粋関数）
 │   ├── compare.js          # ランキング・最安・判定（純粋関数）
-│   ├── search.js           # 検索用の文字正規化（かな/カナ・全角半角）
-│   ├── geo.js              # 現在地、距離計算、Overpass
-│   ├── image.js            # 写真の縮小・保存
-│   ├── chart.js            # SVG グラフ
-│   ├── backup.js           # 書き出し・読み込み
-│   ├── ui.js               # DOM ヘルパー、シート、トースト、確認ダイアログ
+│   ├── format.js           # 表示の整形・日付（純粋関数）
+│   ├── search.js           # 検索用の文字正規化（純粋関数）
+│   ├── images.js           # 写真の縮小・保存・表示
+│   ├── backup.js           # 書き出し・読み込み（検証と統合は純粋関数）
+│   ├── ui.js               # 安全な HTML テンプレート、トースト、ダイアログ
+│   ├── icons.js            # SVG アイコン
+│   ├── version.js          # アプリのバージョン
 │   └── views/
-│       ├── products.js     # 商品一覧
+│       ├── common.js       # 画面どうしの共通部品
+│       ├── products.js     # 商品一覧（ホーム）
 │       ├── product.js      # 商品ページ
-│       ├── recordSheet.js  # 記録シート
+│       ├── productForm.js  # 商品の追加・編集
+│       ├── recordForm.js   # 価格の記録・編集
 │       ├── stores.js       # お店一覧
 │       ├── store.js        # お店ページ
+│       ├── storeForm.js    # お店の追加・編集
 │       ├── calc.js         # 単価電卓
-│       └── settings.js     # 設定
-├── icons/                  # icon.svg（元データ）と PNG 各サイズ
-├── tests/                  # node --test の単体テスト
+│       └── settings.js     # 設定・バックアップ
+├── icons/                  # icon.svg と PNG 各サイズ
+├── tools/make-icons.mjs    # アイコンの PNG 書き出し
+├── tests/                  # node --test の単体テスト ＋ e2e.mjs（画面の通しテスト）
 └── docs/
     └── PLAN.md             # この計画
 ```
 
 - 画面はテンプレートリテラル＋小さな DOM ヘルパーで描画。ユーザー入力や OSM の店名は必ずエスケープ（XSS 対策）
 - CSP（Content-Security-Policy）で読み込み先を自分自身と Overpass API だけに限定
-- ID は `crypto.randomUUID()`、日付は `YYYY-MM-DD`（端末のローカル時刻）
+- ID は時刻＋ランダムの短い文字列、日付は `YYYY-MM-DD`（端末のローカル時刻）
+- 入力フォーム（記録・商品・お店）は、iPhone のキーボードと相性のよい「ページ」として表示（下タブは隠す）
 
 ## 11. 公開方法（GitHub Pages）
 
@@ -431,7 +445,7 @@ price-hikaku/
 | OSM のデータ | 店が載っていない、名前が古いことがある | 手入力・名前の編集ができるように |
 | バーコード | iOS Safari は標準 API が実質使えない | Phase 5 でライブラリ同梱を検討 |
 
-## 14. 確認したいこと（特に指定がなければ右の案で進めます）
+## 14. 確認したいこと → すべて案どおりで決定（2026-11-01）
 
 | # | 質問 | 進める案 |
 |---|---|---|

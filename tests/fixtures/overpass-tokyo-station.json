@@ -1,0 +1,20 @@
+{
+  "_note": "東京駅周辺の Overpass API の結果の一部（テスト用に抜粋）。Data © OpenStreetMap contributors, ODbL 1.0 — https://www.openstreetmap.org/copyright",
+  "version": 0.6,
+  "elements": [
+    { "type": "node", "id": 1952141255, "lat": 35.6847212, "lon": 139.7674365,
+      "tags": { "brand": "LAWSON", "brand:ja": "ローソン", "name": "ローソン", "name:ja": "ローソン", "shop": "convenience" } },
+    { "type": "node", "id": 2065895673, "lat": 35.6813069, "lon": 139.7636463,
+      "tags": { "amenity": "pharmacy", "branch": "丸の内店", "brand": "トモズ", "brand:ja": "トモズ", "name": "トモズ", "name:ja": "トモズ", "addr:neighbourhood": "丸の内二丁目", "shop": "chemist" } },
+    { "type": "node", "id": 2065895720, "lat": 35.6823860, "lon": 139.7639798,
+      "tags": { "branch": "新丸ビル", "brand": "7-ELEVEN", "brand:ja": "セブン-イレブン", "name": "セブン-イレブン", "name:ja": "セブン-イレブン", "addr:neighbourhood": "丸の内一丁目", "shop": "convenience" } },
+    { "type": "node", "id": 2365111053, "lat": 35.6817170, "lon": 139.7714550,
+      "tags": { "branch": "八重洲一丁目店", "brand": "FamilyMart", "brand:ja": "ファミリーマート", "name": "ファミリーマート", "name:ja": "ファミリーマート", "shop": "convenience" } },
+    { "type": "node", "id": 2365555224, "lat": 35.6812828, "lon": 139.7716731,
+      "tags": { "brand": "FamilyMart", "brand:ja": "ファミリーマート", "name": "ファミリーマート", "name:ja": "ファミリーマート", "shop": "convenience" } },
+    { "type": "node", "id": 4697659390, "lat": 35.6813413, "lon": 139.7668440,
+      "tags": { "name": "駅弁屋 祭", "name:ja": "駅弁屋 祭", "shop": "convenience" } },
+    { "type": "node", "id": 5905114985, "lat": 35.6807561, "lon": 139.7633056,
+      "tags": { "brand": "NATURAL LAWSON", "brand:ja": "ナチュラルローソン", "name": "ナチュラルローソン", "name:ja": "ナチュラルローソン", "shop": "convenience" } }
+  ]
+}

@@ -8,6 +8,7 @@
 - iPhone: Safari で開く → 共有ボタン →「ホーム画面に追加」
   - Safari とホーム画面のアプリではデータが別々なので、最初からホーム画面のアプリで使うのがおすすめ
 - データはその端末の中だけに保存されます。ときどき「設定 → バックアップ」でファイルに書き出してください
+- 記録するときに「📍 現在地からお店を探す」を押すと、近くのお店を出します（まだ登録していないお店は OpenStreetMap の地図データから探します。設定でオフにできます）
 
 ## 開発
 
@@ -17,6 +18,7 @@
 python3 -m http.server 8000   # → http://localhost:8000
 npm test                      # 計算まわりの単体テスト（node --test）
 node tests/e2e.mjs            # 画面の通しテスト（Playwright + Chromium が必要）
+node tests/e2e-geo.mjs        # 位置情報まわりの画面テスト（現在地と地図データの応答は固定）
 node tools/make-icons.mjs     # アイコンの作り直し
 ```
 

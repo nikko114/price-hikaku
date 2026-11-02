@@ -7,6 +7,8 @@ import { matches } from '../search.js';
 import { relativeDay, todayStr, daysBetween } from '../format.js';
 import { DEFAULT_CATEGORIES } from '../defaults.js';
 import { thumb, priceTag, allSummaries, storeName } from './common.js';
+import * as geo from '../geo.js';
+import { canAutoLocate } from './location.js';
 
 // 画面を作り直しても検索条件は残す
 const ui = { query: '', category: '', sort: 'recent' };
@@ -92,6 +94,27 @@ function renderList(listEl, summaries) {
   images.hydrate(listEl);
 }
 
+// 「📍 〇〇店の近くにいます」（位置情報が許可済みのときだけ。勝手に許可は聞かない）
+async function showHereBanner(el) {
+  if (!state.stores().some(geo.hasLocation) || !(await canAutoLocate())) return;
+  let pos;
+  try {
+    pos = await geo.getPosition({ maxAgeMs: 2 * 60 * 1000 });
+  } catch {
+    return;
+  }
+  const store = geo.autoPick(geo.nearbyStores(state.stores(), pos, 300), pos, { maxDistance: 150, maxAccuracy: 150 });
+  const box = el.querySelector('[data-ref="here"]');
+  if (!store || !box || !el.isConnected) return;
+  mount(box, html`<div class="here-banner">
+    <p class="here-text">📍 <strong>${store.name}</strong> の近くにいます</p>
+    <div class="here-actions">
+      <a class="btn is-small is-primary" href="#/record?store=${store.id}">${icons.plus}<span>ここで記録</span></a>
+      <a class="btn is-small" href="#/stores/${store.id}">このお店で安いもの</a>
+    </div>
+  </div>`);
+}
+
 export default {
   live: true,
   render(el) {
@@ -108,6 +131,7 @@ export default {
     mount(el, html`
       ${appBar({ title: '商品', large: true, right: html`<a class="appbar-btn" href="#/products/new" aria-label="商品を追加">${icons.plus}</a>` })}
       <div class="page">
+        <div data-ref="here"></div>
         ${installHint()}
         ${backupHint()}
         ${summaries.length
@@ -138,6 +162,7 @@ export default {
 
     const listEl = el.querySelector('[data-ref="list"]');
     if (listEl) renderList(listEl, summaries);
+    showHereBanner(el);
 
     el.addEventListener('input', (e) => {
       if (e.target.dataset.ref === 'q') {

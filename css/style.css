@@ -397,10 +397,14 @@ button.row:active {
 }
 
 .row-title {
-  font-weight: 650;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; /* 長い店名は2行まで（支店名が切れないように） */
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  font-weight: 650;
+  line-height: 1.35;
 }
 
 .row-sub,
@@ -1470,4 +1474,137 @@ body.no-tabbar #toast-root {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ---------- 位置情報・周辺のお店 ---------- */
+[hidden] {
+  display: none !important;
+}
+
+.btn.is-tonal {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.loc-line {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.loc-line.is-error {
+  color: var(--danger);
+}
+
+.loc-line.is-busy {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.sub-label {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.field > .sub-label:first-child {
+  margin-top: 0;
+}
+
+.chip-meta {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.chip[aria-pressed="true"] .chip-meta {
+  color: inherit;
+}
+
+.field .osm-list {
+  margin: 0 -16px;
+  border-top: 0.5px solid var(--sep);
+  border-bottom: 0.5px solid var(--sep);
+}
+
+.osm-row {
+  min-height: 52px;
+}
+
+.distance {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.row-end .distance + .badge {
+  margin-top: 4px;
+}
+
+.osm-credit {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.osm-credit a {
+  color: inherit;
+}
+
+.check-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.check-line input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.row-meta.is-accent {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.here-banner {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+.here-text {
+  margin: 0;
+}
+
+.here-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.loc-buttons {
+  margin-top: 10px;
+}
+
+.toolbar > .seg {
+  display: flex;
+  width: 100%;
 }

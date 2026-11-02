@@ -15,6 +15,7 @@ import { segmented, pressSeg } from './common.js';
 const bk = { status: 'idle', file: null };
 
 const STALE_OPTIONS = [30, 60, 90, 180, 365];
+const RADIUS_OPTIONS = [200, 300, 500, 1000];
 
 function backupBoxHtml() {
   const m = state.meta();
@@ -71,6 +72,30 @@ export default {
               <select id="st-stale" class="input select is-short" data-ref="staleDays">
                 ${STALE_OPTIONS.map((d) => html`<option value="${d}" ${d === s.staleDays ? 'selected' : ''}>${d}日</option>`)}
               </select>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2 class="section-title">位置情報</h2>
+          <div class="card">
+            <div class="field field-inline">
+              <label class="field-label" for="st-loc">現在地から近くのお店を出す</label>
+              <input id="st-loc" type="checkbox" class="switch" data-ref="autoSuggestStore" ${s.autoSuggestStore ? 'checked' : ''}>
+            </div>
+            <div class="field field-inline">
+              <label class="field-label" for="st-osm">まだ登録していないお店も地図データから探す</label>
+              <input id="st-osm" type="checkbox" class="switch" data-ref="onlineStoreSearch" ${s.onlineStoreSearch ? 'checked' : ''} ${s.autoSuggestStore ? '' : 'disabled'}>
+            </div>
+            <div class="field field-inline">
+              <label class="field-label" for="st-radius">「近くのお店」とみなす距離</label>
+              <select id="st-radius" class="input select is-short" data-ref="suggestRadius">
+                ${RADIUS_OPTIONS.map((m) => html`<option value="${m}" ${m === s.suggestRadius ? 'selected' : ''}>${m < 1000 ? `${m}m` : `${m / 1000}km`}</option>`)}
+              </select>
+            </div>
+            <div class="field">
+              <p class="field-hint">位置情報の許可は「📍 現在地からお店を探す」を押したときだけ聞きます。地図データから探すときだけ、現在地の座標を OpenStreetMap のサーバー（Overpass API）に送ります。</p>
+              <p class="osm-credit">地図データ © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</p>
             </div>
           </div>
         </section>
@@ -237,6 +262,8 @@ export default {
     el.addEventListener('change', (e) => {
       const name = e.target.dataset.ref;
       if (name === 'staleDays') state.updateSettings({ staleDays: Number(e.target.value) });
+      if (name === 'suggestRadius') state.updateSettings({ suggestRadius: Number(e.target.value) });
+      if (name === 'autoSuggestStore' || name === 'onlineStoreSearch') state.updateSettings({ [name]: e.target.checked });
       if (name === 'importFile') {
         const file = e.target.files && e.target.files[0];
         e.target.value = '';

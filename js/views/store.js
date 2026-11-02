@@ -7,6 +7,8 @@ import { byNewest } from '../compare.js';
 import { todayStr, fmtDate, fmtAmount, fmtPrice } from '../format.js';
 import { unitPrice } from '../units.js';
 import { thumb, priceTag, notFound, allSummaries } from './common.js';
+import * as geo from '../geo.js';
+import { canAutoLocate } from './location.js';
 
 export default {
   live: true,
@@ -32,6 +34,8 @@ export default {
             <p class="product-tags">
               ${store.chain ? html`<span class="tag">${store.chain}</span>` : ''}
               <span class="tag">値札は${store.priceInput === 'excl' ? '税抜' : '税込'}で入力</span>
+              <span class="tag">${geo.hasLocation(store) ? '📍 位置あり' : '位置は未登録'}</span>
+              <span class="tag" data-ref="distance" hidden></span>
             </p>
             ${store.memo ? html`<p class="product-memo">${store.memo}</p>` : ''}
           </div>
@@ -39,6 +43,7 @@ export default {
 
         <div class="actions">
           <a class="btn is-primary is-block" href="#/record?store=${store.id}">${icons.plus}<span>このお店で記録</span></a>
+          <a class="btn is-block" href="${geo.mapsUrl(store)}" target="_blank" rel="noopener">🗺️ <span>地図で開く</span></a>
         </div>
 
         <section class="section">
@@ -78,5 +83,18 @@ export default {
         </section>
       </div>`);
     images.hydrate(el);
+
+    // 現在地からの距離（許可済みのときだけ）
+    if (geo.hasLocation(store)) {
+      const showDistance = (pos) => {
+        const tag = el.querySelector('[data-ref="distance"]');
+        if (!tag || !pos) return;
+        tag.textContent = `ここから ${geo.fmtDistance(geo.distanceM(pos, store))}`;
+        tag.hidden = false;
+      };
+      const cached = geo.cachedPosition(5 * 60 * 1000);
+      if (cached) showDistance(cached);
+      else canAutoLocate().then((ok) => ok && geo.getPosition().then(showDistance).catch(() => {}));
+    }
   },
 };

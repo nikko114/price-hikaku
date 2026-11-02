@@ -15,6 +15,8 @@ import {
 import { matchScore } from '../search.js';
 import { categoryInfo, DEFAULT_TAX_RATE } from '../defaults.js';
 import { thumb, segmented, pressSeg, notFound, storeName, requestPersistOnce, categoryNames } from './common.js';
+import * as geo from '../geo.js';
+import { createLocator, locationLineHtml, osmListHtml, canAutoLocate, locationEnabled } from './location.js';
 
 const RECENT_STORE_MS = 2 * 60 * 60 * 1000; // 2時間以内に記録したお店を最初から選んでおく
 const MAX_STORE_CHIPS = 8;
@@ -52,8 +54,11 @@ export default {
       newTaxRate: DEFAULT_TAX_RATE,
       newPhoto: null, // { full, thumb, previewUrl }
       storeId: null,
+      storeSource: null, // 'edit' | 'query' | 'recent'（2時間以内） | 'auto'（現在地） | 'user'
       addingStore: false,
       newStoreName: '',
+      newStoreUseLoc: true, // 手入力の新しいお店に、いまの場所を位置として付けるか
+      newStore: null, // 地図データから選んだ新しいお店 { name, chain, lat, lng, osmId, distance }
       price: '',
       taxMode: settings.lastTaxMode || 'incl',
       amount: '',
@@ -68,6 +73,7 @@ export default {
       Object.assign(f, {
         productId: editing.productId,
         storeId: editing.storeId,
+        storeSource: 'edit',
         price: String(editing.price),
         taxMode: editing.taxIncluded ? 'incl' : 'excl',
         amount: String(editing.amount),
@@ -81,9 +87,13 @@ export default {
       if (query.product && state.product(query.product)) f.productId = query.product;
       if (query.store && state.store(query.store)) {
         f.storeId = query.store;
+        f.storeSource = 'query';
       } else {
         const last = [...state.records()].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))[0];
-        if (last && Date.now() - Date.parse(last.createdAt) < RECENT_STORE_MS && state.store(last.storeId)) f.storeId = last.storeId;
+        if (last && Date.now() - Date.parse(last.createdAt) < RECENT_STORE_MS && state.store(last.storeId)) {
+          f.storeId = last.storeId;
+          f.storeSource = 'recent';
+        }
       }
       if (query.price) f.price = query.price;
       if (query.amount) f.amount = query.amount;
@@ -206,12 +216,67 @@ export default {
         ${!q && !list.length ? html`<li class="suggest-label">商品名を入れると、新しい商品として登録できます</li>` : ''}`;
     }
 
+    // 現在地（許可済みなら自動で取得。結果が出たら近くのお店を自動で選ぶ）
+    let autoDone = false;
+    const loc = createLocator(() => {
+      maybeAutoSelect();
+      if (ref('store')) renderStore();
+    });
+
+    function goodPosition() {
+      const pos = loc.state.pos;
+      return pos && pos.accuracy <= 150 ? pos : null;
+    }
+
+    function maybeAutoSelect() {
+      if (autoDone || loc.state.status !== 'located') return;
+      autoDone = true;
+      if (!['recent', 'auto', null].includes(f.storeSource) || f.newStore || f.addingStore) return;
+      const pos = loc.state.pos;
+      const pick = geo.autoPick(geo.nearbyStores(state.stores(), pos, 300), pos);
+      if (pick) {
+        if (pick.id !== f.storeId) pickStore(pick.id, 'auto');
+        else f.storeSource = 'auto';
+        return;
+      }
+      // 2時間以内に記録したお店でも、いまは遠くにいるなら選び直してもらう
+      const s = f.storeId ? state.store(f.storeId) : null;
+      if (f.storeSource === 'recent' && s && geo.hasLocation(s) && pos.accuracy <= 150 && geo.distanceM(pos, s) > 500) {
+        f.storeId = null;
+        f.storeSource = null;
+      }
+    }
+
+    function storeChooserVisible() {
+      return !f.storeId && !f.newStore && !f.addingStore;
+    }
+
     function storeSectionHtml() {
+      const pos = loc.state.pos;
       const s = f.storeId ? state.store(f.storeId) : null;
       if (s) {
+        const d = pos && geo.hasLocation(s) ? geo.distanceM(pos, s) : null;
+        const sub = [s.chain, d != null ? `ここから${geo.fmtDistance(d)}` : ''].filter(Boolean).join(' ・ ');
         return html`<div class="row picked">
           <span class="thumb" data-fallback="🏪" aria-hidden="true"></span>
-          <span class="row-main"><span class="row-title">${s.name}</span>${s.chain ? html`<span class="row-sub">${s.chain}</span>` : ''}</span>
+          <span class="row-main">
+            <span class="row-title">${s.name}</span>
+            ${sub ? html`<span class="row-sub">${sub}</span>` : ''}
+            ${f.storeSource === 'auto' ? html`<span class="row-meta is-accent">📍 近くのお店を自動で選びました</span>` : ''}
+          </span>
+          <button type="button" class="link-btn" data-act="change-store">変更</button>
+        </div>
+        ${!geo.hasLocation(s) && goodPosition()
+          ? html`<div class="field"><button type="button" class="link-btn" data-act="set-store-loc">📍 いまの場所を、このお店の位置として登録</button></div>`
+          : ''}`;
+      }
+      if (f.newStore) {
+        return html`<div class="row picked">
+          <span class="thumb is-new" aria-hidden="true">🆕</span>
+          <span class="row-main">
+            <span class="row-title">${f.newStore.name}</span>
+            <span class="row-sub">新しいお店として登録します${Number.isFinite(f.newStore.distance) ? ` ・ ここから${geo.fmtDistance(f.newStore.distance)}` : ''}</span>
+          </span>
           <button type="button" class="link-btn" data-act="change-store">変更</button>
         </div>`;
       }
@@ -219,23 +284,44 @@ export default {
         return html`<div class="field">
           <label class="field-label" for="f-new-store">新しいお店の名前</label>
           <input id="f-new-store" class="input" data-ref="newStoreName" value="${f.newStoreName}" placeholder="例: イオン 〇〇店" autocomplete="off" enterkeyhint="next">
+          ${goodPosition()
+            ? html`<label class="check-line"><input type="checkbox" data-ref="newStoreUseLoc" ${f.newStoreUseLoc ? 'checked' : ''}> いまの場所をこのお店の位置にする（お店にいないときは外す）</label>`
+            : ''}
           <div class="field-foot"><button type="button" class="link-btn" data-act="cancel-new-store">登録済みのお店から選ぶ</button></div>
         </div>`;
       }
-      const list = storesByRecent();
+
+      const nearby = pos ? geo.nearbyStores(state.stores(), pos, state.settings().suggestRadius || 300) : [];
+      const nearIds = new Set(nearby.map((x) => x.store.id));
+      const list = storesByRecent().filter((st) => !nearIds.has(st.id));
       const chips = list.slice(0, MAX_STORE_CHIPS);
       const rest = list.slice(MAX_STORE_CHIPS).sort((a, b) => a.name.localeCompare(b.name, 'ja'));
-      return html`<div class="field">
-        <div class="chips is-wrap" role="group" aria-label="お店">
-          ${chips.map((st) => html`<button type="button" class="chip" data-pick-store="${st.id}">${st.name}</button>`)}
-          <button type="button" class="chip is-add" data-act="new-store">＋ 新しいお店</button>
-        </div>
-        ${rest.length ? html`<select class="input select" data-ref="storeSelect" aria-label="その他のお店">
-          <option value="">その他のお店から選ぶ…</option>
-          ${rest.map((st) => html`<option value="${st.id}">${st.name}</option>`)}
-        </select>` : ''}
-        ${!list.length ? html`<p class="field-hint">まだお店がありません。「＋ 新しいお店」から登録してください。</p>` : ''}
-      </div>`;
+      const showLocation = locationEnabled();
+      return html`
+        ${showLocation
+          ? html`<div class="field loc-field">
+              ${locationLineHtml(loc)}
+              ${nearby.length
+                ? html`<p class="sub-label">近くの登録済みのお店</p>
+                  <div class="chips is-wrap" role="group" aria-label="近くのお店">
+                    ${nearby.map((x) => html`<button type="button" class="chip" data-pick-store="${x.store.id}">${x.store.name}<span class="chip-meta">${geo.fmtDistance(x.distance)}</span></button>`)}
+                  </div>`
+                : ''}
+              ${osmListHtml(loc)}
+            </div>`
+          : ''}
+        <div class="field">
+          ${showLocation && (nearby.length || loc.state.status === 'located') ? html`<p class="sub-label">登録済みのお店</p>` : ''}
+          <div class="chips is-wrap" role="group" aria-label="お店">
+            ${chips.map((st) => html`<button type="button" class="chip" data-pick-store="${st.id}">${st.name}</button>`)}
+            <button type="button" class="chip is-add" data-act="new-store">＋ 新しいお店</button>
+          </div>
+          ${rest.length ? html`<select class="input select" data-ref="storeSelect" aria-label="その他のお店">
+            <option value="">その他のお店から選ぶ…</option>
+            ${rest.map((st) => html`<option value="${st.id}">${st.name}</option>`)}
+          </select>` : ''}
+          ${!list.length && !nearby.length ? html`<p class="field-hint">まだお店がありません。${showLocation ? '近くのお店から選ぶか、' : ''}「＋ 新しいお店」から登録してください。</p>` : ''}
+        </div>`;
     }
 
     function unitOptionsHtml() {
@@ -328,6 +414,10 @@ export default {
     }
     function renderStore() {
       mount(ref('store'), storeSectionHtml());
+      // お店を選んでいる最中で、現在地がわかったら、周辺のお店（地図データ）も探す
+      if (storeChooserVisible() && loc.state.status === 'located' && loc.state.osm.status === 'idle' && state.settings().onlineStoreSearch) {
+        setTimeout(() => loc.searchOsm(), 0);
+      }
     }
     function renderUnits() {
       mount(ref('unit'), unitOptionsHtml());
@@ -440,8 +530,10 @@ export default {
       focusField(ref('price'));
     }
 
-    function pickStore(id) {
+    function pickStore(id, source = 'user') {
       f.storeId = id;
+      f.storeSource = source;
+      f.newStore = null;
       f.addingStore = false;
       const s = state.store(id);
       if (s?.priceInput) {
@@ -464,7 +556,7 @@ export default {
     function validate() {
       const p = currentProduct();
       if (!p && !f.newProductName.trim()) return ['商品を選んでください', ref('productQuery')];
-      if (!f.storeId && !f.newStoreName.trim()) return ['お店を選んでください', ref('newStoreName')];
+      if (!f.storeId && !f.newStore && !f.newStoreName.trim()) return ['お店を選んでください', ref('newStoreName')];
       if (!(parseNumber(f.price) > 0)) return ['値段を入れてください', ref('price')];
       if (!(parseNumber(f.amount) > 0)) return ['内容量を入れてください', ref('amount')];
       const pack = f.pack === '' ? 1 : parseNumber(f.pack);
@@ -511,7 +603,20 @@ export default {
             favorite: false,
           };
         }
-        const newStore = f.storeId ? null : { name: f.newStoreName.trim(), chain: '', lat: null, lng: null, osmId: null, priceInput: f.taxMode, memo: '' };
+        let newStore = null;
+        if (!f.storeId) {
+          const pos = goodPosition();
+          newStore = f.newStore
+            ? { name: f.newStore.name, chain: f.newStore.chain, lat: f.newStore.lat, lng: f.newStore.lng, osmId: f.newStore.osmId }
+            : {
+                name: f.newStoreName.trim(),
+                chain: '',
+                lat: f.newStoreUseLoc && pos ? pos.lat : null,
+                lng: f.newStoreUseLoc && pos ? pos.lng : null,
+                osmId: null,
+              };
+          Object.assign(newStore, { priceInput: f.taxMode, memo: '' });
+        }
         const record = {
           productId: p ? p.id : null,
           storeId: f.storeId,
@@ -546,7 +651,7 @@ export default {
           if (f.newPhoto) URL.revokeObjectURL(f.newPhoto.previewUrl);
           Object.assign(f, {
             productId: null, productQuery: '', newProductName: '', newCategory: '', newTaxRate: DEFAULT_TAX_RATE, newPhoto: null,
-            storeId: saved.storeId, addingStore: false, newStoreName: '',
+            storeId: saved.storeId, storeSource: 'user', newStore: null, addingStore: false, newStoreName: '',
             price: '', amount: '', pack: '1', isSale: false, note: '',
           });
           renderAll();
@@ -614,6 +719,8 @@ export default {
         f.isSale = e.target.checked;
       } else if (name === 'storeSelect' && e.target.value) {
         pickStore(e.target.value);
+      } else if (name === 'newStoreUseLoc') {
+        f.newStoreUseLoc = e.target.checked;
       } else if (name === 'photo') {
         const file = e.target.files && e.target.files[0];
         e.target.value = '';
@@ -635,6 +742,19 @@ export default {
       if (pickP) return pickProduct(pickP.dataset.pickProduct);
       const pickS = t.closest('[data-pick-store]');
       if (pickS) return pickStore(pickS.dataset.pickStore);
+      const osm = t.closest('[data-osm]');
+      if (osm) {
+        const c = loc.candidate(osm.dataset.osm);
+        if (c) {
+          f.newStore = { ...c };
+          f.storeId = null;
+          f.storeSource = 'user';
+          f.addingStore = false;
+          renderStore();
+          renderVerdict();
+        }
+        return;
+      }
       const cat = t.closest('[data-new-cat]');
       if (cat) {
         f.newCategory = f.newCategory === cat.dataset.newCat ? '' : cat.dataset.newCat;
@@ -692,9 +812,34 @@ export default {
           break;
         case 'new-store':
           f.addingStore = true;
+          f.newStore = null;
           renderStore();
           ref('newStoreName')?.focus();
           break;
+        case 'locate':
+          loc.locate();
+          break;
+        case 'relocate':
+          loc.locate({ force: true });
+          break;
+        case 'search-osm':
+          loc.searchOsm();
+          break;
+        case 'osm-more':
+          loc.expand();
+          break;
+        case 'set-store-loc': {
+          const pos = goodPosition();
+          if (!pos || !f.storeId) break;
+          try {
+            state.updateStore(f.storeId, { lat: pos.lat, lng: pos.lng });
+            toast('お店の位置を登録しました。次からは近くに来ると自動で選ばれます');
+          } catch (err) {
+            toast(saveErrorMessage(err));
+          }
+          renderStore();
+          break;
+        }
         case 'cancel-new-store':
           f.addingStore = false;
           f.newStoreName = '';
@@ -702,8 +847,11 @@ export default {
           break;
         case 'change-store':
           f.storeId = null;
+          f.newStore = null;
+          f.storeSource = 'user';
           renderStore();
           renderVerdict();
+          if (loc.state.status === 'idle') canAutoLocate().then((ok) => ok && loc.locate());
           break;
         default:
       }
@@ -737,7 +885,15 @@ export default {
     renderAll();
     if (!editing && !f.productId) ref('productQuery')?.focus({ preventScroll: true });
 
+    // 位置情報が許可済みなら、聞かずに現在地を取りにいく（お店を指定して開いたとき・編集のときは取らない）
+    if (!editing && f.storeSource !== 'query') {
+      canAutoLocate().then((ok) => {
+        if (ok && el.isConnected) loc.locate();
+      });
+    }
+
     return () => {
+      loc.dispose();
       if (f.newPhoto) URL.revokeObjectURL(f.newPhoto.previewUrl);
     };
   },

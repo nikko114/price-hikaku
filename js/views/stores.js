@@ -9,6 +9,32 @@ import { allSummaries, segmented, pressSeg } from './common.js';
 import { canAutoLocate, locationEnabled } from './location.js';
 
 const ui = { sort: 'recent' }; // 'recent' | 'near'
+
+// どのお店が安い？（最安になっている商品数の横棒。1店だけなら棒にせず文で）
+function winnersHtml(counts) {
+  const ranking = [...counts.entries()]
+    .map(([id, n]) => ({ store: state.store(id), n }))
+    .filter((x) => x.store && x.n > 0)
+    .sort((a, b) => b.n - a.n || a.store.name.localeCompare(b.store.name, 'ja'));
+  if (!ranking.length) return '';
+  const head = html`<h2 class="section-title">どのお店が安い？</h2>`;
+  if (ranking.length === 1) {
+    return html`<section class="section">${head}
+      <p class="section-note">2店以上で比べた商品は、いまのところ全部（${ranking[0].n}品）<strong>${ranking[0].store.name}</strong>がいちばん安いです。</p>
+    </section>`;
+  }
+  const max = ranking[0].n;
+  return html`<section class="section">${head}
+    <p class="section-note">2店以上で比べた商品のうち、いちばん安いお店になっている数</p>
+    <div class="card"><ul class="hbar-list">
+      ${ranking.map((x) => html`<li class="hbar-row"><a href="#/stores/${x.store.id}">
+        <span class="hbar-name">${x.store.name}</span>
+        <span class="hbar-track" aria-hidden="true"><span class="hbar-fill" style="width:${((x.n / max) * 100).toFixed(1)}%"></span></span>
+        <span class="hbar-value">${x.n}品</span>
+      </a></li>`)}
+    </ul></div>
+  </section>`;
+}
 const loc = { status: 'idle', error: null }; // 近い順のときの現在地の取得状況
 
 export default {
@@ -18,7 +44,8 @@ export default {
 
     function draw() {
       const today = todayStr();
-      const counts = bestStoreCounts(allSummaries());
+      // 2店以上で比べた商品のうち、最安になっている数
+      const counts = bestStoreCounts(allSummaries(), { minStores: 2 });
       const recordCount = new Map();
       const lastDate = new Map();
       for (const r of state.records()) {
@@ -66,7 +93,8 @@ export default {
                     ${icons.chevron}
                   </a></li>`;
                 })}
-              </ul>`
+              </ul>
+              ${winnersHtml(counts)}`
             : emptyState({
                 emoji: '🏪',
                 title: 'まだお店がありません',

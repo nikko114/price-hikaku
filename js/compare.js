@@ -109,11 +109,11 @@ export function judge({ unitPrice: u, storeId = null, summary, threshold = 0.05 
   return { level: 'expensive', bestOther, diff, ratio };
 }
 
-// お店ごとの「最安になっている商品数」
-export function bestStoreCounts(summaries) {
+// お店ごとの「最安になっている商品数」（minStores: 何店以上で比べた商品だけ数えるか）
+export function bestStoreCounts(summaries, { minStores = 1 } = {}) {
   const counts = new Map();
   for (const s of summaries) {
-    if (s.best) counts.set(s.best.storeId, (counts.get(s.best.storeId) || 0) + 1);
+    if (s.best && s.stores.length >= minStores) counts.set(s.best.storeId, (counts.get(s.best.storeId) || 0) + 1);
   }
   return counts;
 }

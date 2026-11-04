@@ -104,6 +104,10 @@ test('bestStoreCounts / byNewest / groupBy', () => {
   const counts = bestStoreCounts([s1, s2]);
   assert.equal(counts.get('gyomu'), 1);
   assert.equal(counts.get('aeon'), 1);
+  // 2店以上で比べた商品だけ数える（牛乳はイオンだけなので数えない）
+  const compared = bestStoreCounts([s1, s2], { minStores: 2 });
+  assert.equal(compared.get('gyomu'), 1);
+  assert.equal(compared.get('aeon'), undefined);
   const sorted = [...records].sort(byNewest).map((r) => r.date);
   assert.deepEqual(sorted, ['2026-11-01', '2026-10-28', '2026-09-12', '2026-08-18', '2026-07-01']);
   assert.equal(groupBy(records, (r) => r.storeId).get('aeon').length, 3);

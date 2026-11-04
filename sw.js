@@ -2,7 +2,7 @@
 // ファイルを足したら ASSETS にも足す（tests/sw.test.js で確認）
 // 中身を変えたら VERSION を上げる（js/version.js と同じ値にする）
 
-const VERSION = '0.2.2';
+const VERSION = '0.3.0';
 const CACHE = `price-hikaku-${VERSION}`;
 
 const ASSETS = [
@@ -12,6 +12,7 @@ const ASSETS = [
   './css/style.css',
   './js/app.js',
   './js/backup.js',
+  './js/chart.js',
   './js/compare.js',
   './js/db.js',
   './js/defaults.js',

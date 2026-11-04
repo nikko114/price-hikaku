@@ -19,6 +19,7 @@ python3 -m http.server 8000   # → http://localhost:8000
 npm test                      # 計算まわりの単体テスト（node --test）
 node tests/e2e.mjs            # 画面の通しテスト（Playwright + Chromium が必要）
 node tests/e2e-geo.mjs        # 位置情報まわりの画面テスト（現在地と地図データの応答は固定）
+node tests/e2e-chart.mjs      # グラフの画面テスト（数か月分のデータを入れて確認）
 node tools/make-icons.mjs     # アイコンの作り直し
 ```
 

@@ -10,6 +10,7 @@ import {
   buildBackupFile, readBackupFile, validateBackup, mergeData, deliverFile, downloadFile, dataUrlToBlob,
 } from '../backup.js';
 import { segmented, pressSeg } from './common.js';
+import { clearOsmCache } from '../geo.js';
 
 // 画面を作り直してもバックアップの準備状態は残す
 const bk = { status: 'idle', file: null };
@@ -251,6 +252,7 @@ export default {
         if (!ok) return;
         try {
           state.clearAll();
+          clearOsmCache();
           await db.clearImages();
           toast('すべてのデータを削除しました');
         } catch (err) {

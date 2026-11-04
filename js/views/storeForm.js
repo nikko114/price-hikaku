@@ -232,6 +232,9 @@ export default {
         case 'search-osm':
           loc.searchOsm();
           break;
+        case 'search-osm-force':
+          loc.searchOsm({ force: true });
+          break;
         case 'osm-more':
           loc.expand();
           break;

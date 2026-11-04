@@ -98,14 +98,23 @@ function setupGlobalActions() {
 
 function setupServiceWorker() {
   if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
-  let refreshing = false;
+  // 「更新」を押したときだけ読み込み直す
+  // （初めて開いたときも Service Worker がページを受け持つ瞬間にこのイベントが来るので、無条件に読み込み直さない）
+  let reloadOnChange = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (refreshing) return;
-    refreshing = true;
+    if (!reloadOnChange) return;
+    reloadOnChange = false;
     location.reload();
   });
   const offerUpdate = (worker) => {
-    toast('新しいバージョンがあります', { actionLabel: '更新', onAction: () => worker.postMessage('skipWaiting'), duration: 15000 });
+    toast('新しいバージョンがあります', {
+      actionLabel: '更新',
+      onAction: () => {
+        reloadOnChange = true;
+        worker.postMessage('skipWaiting');
+      },
+      duration: 15000,
+    });
   };
   navigator.serviceWorker.register('./sw.js').then((reg) => {
     if (reg.waiting && navigator.serviceWorker.controller) offerUpdate(reg.waiting);

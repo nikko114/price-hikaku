@@ -132,8 +132,20 @@ body.no-tabbar #tabbar {
   display: none;
 }
 
-.view {
+/* 画面を開いたときのふわっと表示は中身だけ。上のバーは最初から不透明のままにする
+   （iOS 26 は、上端にある不透明なバーを見つけられないとステータスバーの下をぼかして暗くするため） */
+.view > .page {
   animation: view-in 0.18s ease-out;
+}
+
+#statusbar-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  height: var(--safe-top);
+  background: var(--appbar-bg);
 }
 
 @keyframes view-in {
@@ -1494,6 +1506,10 @@ body.no-tabbar #toast-root {
 
 .loc-line.is-error {
   color: var(--danger);
+}
+
+.loc-sub {
+  font-size: 12px;
 }
 
 .loc-line.is-busy {

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   distanceM, fmtDistance, buildOverpassQuery, storeNameFromTags, chainFromTags, parseOverpass,
   excludeRegistered, nearbyStores, autoPick, mapsUrl, hasLocation,
+  findCachedCell, itemsFromCell, addCell, overpassFailed, OSM_CACHE_TTL, OSM_CACHE_STALE_MAX, OVERPASS_ENDPOINTS,
 } from '../js/geo.js';
 
 const TOKYO_STATION = { lat: 35.6812, lng: 139.7671 };
@@ -27,7 +28,7 @@ test('fmtDistance', () => {
 
 test('buildOverpassQuery', () => {
   const q = buildOverpassQuery(TOKYO_STATION, 500);
-  assert.match(q, /^\[out:json\]/);
+  assert.match(q, /^\[out:json\]\[timeout:10\]\[maxsize:\d+\];/);
   assert.match(q, /around:500,35\.681200,139\.767100/);
   assert.match(q, /"shop"~"\^\(supermarket\|convenience\|chemist\|/);
   assert.match(q, /out center 60;$/);
@@ -123,4 +124,48 @@ test('mapsUrl / hasLocation', () => {
   assert.equal(hasLocation({ lat: 0, lng: 0 }), true);
   assert.equal(hasLocation({ lat: null, lng: null }), false);
   assert.equal(hasLocation(null), false);
+});
+
+test('サーバーは3つ（混んでいたら次へ）', () => {
+  assert.equal(OVERPASS_ENDPOINTS.length, 3);
+  for (const url of OVERPASS_ENDPOINTS) assert.match(url, /^https:\/\/.+\/interpreter$/);
+});
+
+test('overpassFailed: HTTP 200 でも remark のエラーは失敗あつかい', () => {
+  assert.equal(overpassFailed({ elements: [] }), false); // 本当にお店がないだけ
+  assert.equal(overpassFailed({ elements: [], remark: 'runtime error: Query timed out in "query" at line 1 after 10 seconds.' }), true);
+  assert.equal(overpassFailed({ elements: [], remark: 'runtime error: Query run out of memory using about 64 MB of RAM.' }), true);
+  assert.equal(overpassFailed({ elements: [{ type: 'node', id: 1 }], remark: 'runtime error: timeout' }), false); // 一部でも結果があれば使う
+  assert.equal(overpassFailed(null), true);
+  assert.equal(overpassFailed({ remark: 'x' }), true);
+});
+
+test('検索結果のキャッシュ: 150m 以内・期限内なら使い回す', () => {
+  const now = Date.parse('2026-11-04T12:00:00Z');
+  const here = { lat: 35.0, lng: 135.0 };
+  const items = parseOverpass({ elements: [
+    { type: 'node', id: 1, lat: 35.0004, lon: 135.0, tags: { name: 'イオン', branch: 'テスト店', shop: 'supermarket' } },
+    { type: 'node', id: 2, lat: 35.003, lon: 135.0, tags: { name: '業務スーパー', branch: 'テスト店', shop: 'supermarket' } },
+  ] }, here);
+  let cache = addCell({}, here, 500, items, now);
+  const cell = Object.values(cache)[0];
+  assert.equal(cell.items[0].distance, undefined, '距離は保存しない');
+  // 100m 北に動いても使える。距離は今の場所から計算し直す
+  const moved = { lat: 35.0009, lng: 135.0 };
+  const hit = findCachedCell(cache, moved, 500, now + 1000, OSM_CACHE_TTL);
+  assert.ok(hit);
+  const re = itemsFromCell(hit, moved, 500);
+  assert.equal(re[0].name, 'イオン テスト店');
+  assert.ok(Math.abs(re[0].distance - 55.6) < 1);
+  // 200m 動いたら使わない／半径が違えば使わない／期限切れは使わない（古い結果の許容は別）
+  assert.equal(findCachedCell(cache, { lat: 35.0018, lng: 135.0 }, 500, now, OSM_CACHE_TTL), null);
+  assert.equal(findCachedCell(cache, here, 1000, now, OSM_CACHE_TTL), null);
+  const later = now + OSM_CACHE_TTL + 1;
+  assert.equal(findCachedCell(cache, here, 500, later, OSM_CACHE_TTL), null);
+  assert.ok(findCachedCell(cache, here, 500, later, OSM_CACHE_STALE_MAX));
+  // 古すぎるものは消え、件数も上限まで
+  for (let i = 0; i < 50; i += 1) cache = addCell(cache, { lat: 36 + i * 0.01, lng: 135 }, 500, [], now + i);
+  assert.equal(Object.keys(cache).length, 40);
+  const pruned = addCell(cache, here, 500, [], now + OSM_CACHE_STALE_MAX + 1000);
+  assert.equal(Object.keys(pruned).length, 1);
 });

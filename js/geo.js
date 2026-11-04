@@ -2,7 +2,13 @@
 // 前半は DOM に触らない純粋関数（tests/geo.test.js でテスト）
 import { normalizeText } from './search.js';
 
-export const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+// 公開されている Overpass API のサーバー（混んでいたら次へ。どれも無料・登録不要）
+// https://wiki.openstreetmap.org/wiki/Overpass_API#Public_Overpass_API_instances
+export const OVERPASS_ENDPOINTS = [
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+];
 
 // 探すお店の種類（OpenStreetMap の shop=…）
 export const SHOP_LABELS = {
@@ -51,8 +57,9 @@ export function hasLocation(s) {
   return !!s && Number.isFinite(s.lat) && Number.isFinite(s.lng);
 }
 
+// timeout と maxsize を小さめに宣言すると、混んでいるサーバーでも受け付けてもらいやすい
 export function buildOverpassQuery({ lat, lng }, radius = 500, limit = 60) {
-  return `[out:json][timeout:15];nwr["shop"~"^(${SHOP_TYPES.join('|')})$"](around:${Math.round(radius)},${lat.toFixed(6)},${lng.toFixed(6)});out center ${limit};`;
+  return `[out:json][timeout:10][maxsize:67108864];nwr["shop"~"^(${SHOP_TYPES.join('|')})$"](around:${Math.round(radius)},${lat.toFixed(6)},${lng.toFixed(6)});out center ${limit};`;
 }
 
 // 店名: name ＋ branch（例: セブン-イレブン 丸の内店）。branch がなければ町名で区別する
@@ -130,6 +137,48 @@ export function autoPick(nearby, pos, { maxDistance = 150, maxAccuracy = 100, ma
   return first.store;
 }
 
+// ---- 周辺のお店の検索結果のキャッシュ（端末に保存。同じあたりでは問い合わせない） ----
+export const OSM_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7日はそのまま使う
+export const OSM_CACHE_STALE_MAX = 60 * 24 * 60 * 60 * 1000; // つながらないときは60日前の結果まで使う
+export const OSM_CACHE_REUSE_M = 150; // 前に探した地点から150m以内なら使い回す
+const OSM_CACHE_MAX = 40;
+
+// 使える検索結果（maxAge 以内・同じ半径・いちばん近い地点）
+export function findCachedCell(cache, pos, radius, now, maxAge) {
+  let best = null;
+  for (const cell of Object.values(cache || {})) {
+    if (!cell || cell.radius !== radius || !Array.isArray(cell.items) || !(now - cell.at <= maxAge)) continue;
+    const d = distanceM(pos, cell);
+    if (d > OSM_CACHE_REUSE_M) continue;
+    if (!best || d < best.d) best = { cell, d };
+  }
+  return best ? best.cell : null;
+}
+
+// キャッシュの結果を、いまの場所からの距離で並べ直す
+export function itemsFromCell(cell, pos, radius) {
+  return cell.items
+    .map((c) => ({ ...c, distance: distanceM(pos, c) }))
+    .filter((c) => c.distance <= radius + OSM_CACHE_REUSE_M)
+    .sort((a, b) => a.distance - b.distance);
+}
+
+export function addCell(cache, pos, radius, items, now) {
+  const key = `${pos.lat.toFixed(3)},${pos.lng.toFixed(3)},${radius}`;
+  const cell = { lat: pos.lat, lng: pos.lng, radius, at: now, items: items.map(({ distance, ...rest }) => rest) };
+  const entries = Object.entries({ ...cache, [key]: cell })
+    .filter(([, c]) => c && now - c.at <= OSM_CACHE_STALE_MAX)
+    .sort((a, b) => b[1].at - a[1].at)
+    .slice(0, OSM_CACHE_MAX);
+  return Object.fromEntries(entries);
+}
+
+// Overpass は混んでいると、HTTP 200 のまま remark にエラーを入れて返すことがある
+export function overpassFailed(json) {
+  if (!json || !Array.isArray(json.elements)) return true;
+  return json.elements.length === 0 && /runtime error|timed out|timeout|out of memory|rate_limited|too many/i.test(json.remark || '');
+}
+
 export function mapsUrl(store) {
   const q = encodeURIComponent(store.name);
   return hasLocation(store) ? `https://maps.apple.com/?ll=${store.lat},${store.lng}&q=${q}` : `https://maps.apple.com/?q=${q}`;
@@ -163,11 +212,11 @@ export function osmErrorMessage(err) {
     case 'offline':
       return '電波がないので、周辺のお店は探せません。';
     case 'busy':
-      return '地図データのサーバーが混んでいます。少し待ってからもう一度どうぞ。';
+      return '地図データのサーバーが混んでいて、周辺のお店を探せませんでした。少し待ってから「もう一度」を押してください。';
     case 'osmTimeout':
-      return '周辺のお店の検索に時間がかかっています。';
+      return '地図データのサーバーから返事がありませんでした（電波が弱いか、サーバーが混んでいます）。';
     default:
-      return '周辺のお店を探せませんでした。';
+      return '周辺のお店を探せませんでした（通信エラー）。';
   }
 }
 
@@ -212,33 +261,171 @@ export function getPosition({ maxAgeMs = 60_000, timeout = 15_000 } = {}) {
   });
 }
 
-const OSM_TTL = 10 * 60 * 1000;
-const osmCache = new Map(); // 約100m四方ごと
+// ---- 周辺のお店の検索（Overpass API） ----
 
-export async function searchNearbyShops(pos, { radius = 500, timeoutMs = 15_000 } = {}) {
-  const key = `${pos.lat.toFixed(3)},${pos.lng.toFixed(3)},${radius}`;
-  const hit = osmCache.get(key);
-  if (hit && Date.now() - hit.at < OSM_TTL) {
-    return hit.items.map((c) => ({ ...c, distance: distanceM(pos, c) })).sort((a, b) => a.distance - b.distance);
-  }
-  if (navigator.onLine === false) throw new GeoError('offline');
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+const OSM_CACHE_KEY = 'ph.osmCache.v1';
+const PREFERRED_KEY = 'ph.osmServer.v1';
+const cooldownUntil = new Map(); // 429 などで断られたサーバーは30秒休ませる（利用ルール）
+let preferred = null; // 最後に返事をくれたサーバーを、次（アプリを開き直したあとも）は最初に使う
+try {
+  preferred = typeof localStorage === 'undefined' ? null : localStorage.getItem(PREFERRED_KEY);
+} catch {
+  preferred = null;
+}
+
+function rememberServer(url) {
+  if (preferred === url) return;
+  preferred = url;
   try {
-    const res = await fetch(OVERPASS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `data=${encodeURIComponent(buildOverpassQuery(pos, radius))}`,
-      signal: ctrl.signal,
-    });
-    if (!res.ok) throw new GeoError(res.status === 429 || res.status === 504 ? 'busy' : 'osm');
-    const items = parseOverpass(await res.json(), pos);
-    osmCache.set(key, { at: Date.now(), items });
-    return items;
+    localStorage.setItem(PREFERRED_KEY, url);
+  } catch {
+    /* 覚えられなくても困らない */
+  }
+}
+
+function loadOsmCache() {
+  try {
+    return JSON.parse(localStorage.getItem(OSM_CACHE_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveOsmCache(cache) {
+  try {
+    localStorage.setItem(OSM_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    /* 保存できなくても困らない */
+  }
+}
+
+export function clearOsmCache() {
+  try {
+    localStorage.removeItem(OSM_CACHE_KEY);
+    localStorage.removeItem(PREFERRED_KEY);
+  } catch {
+    /* なにもしない */
+  }
+}
+
+function endpointOrder(now = Date.now()) {
+  const list = [...OVERPASS_ENDPOINTS];
+  if (preferred && list.includes(preferred)) {
+    list.splice(list.indexOf(preferred), 1);
+    list.unshift(preferred);
+  }
+  const ready = list.filter((url) => !(cooldownUntil.get(url) > now));
+  return ready.length ? ready : list;
+}
+
+/**
+ * サーバーに順番に問い合わせる。返事が遅ければ hedgeMs 後に次のサーバーにも聞き、
+ * 断られたり失敗したらすぐ次へ。最初に返ってきた結果を使う。
+ */
+function queryOverpass(query, { hedgeMs = 4000, attemptTimeoutMs = 12_000, onSlow } = {}) {
+  const endpoints = endpointOrder();
+  return new Promise((resolve, reject) => {
+    let next = 0;
+    let running = 0;
+    let finished = false;
+    let lastErr = null;
+    let slowNotified = false;
+    const controllers = new Set();
+
+    const finish = (fn, value) => {
+      if (finished) return;
+      finished = true;
+      for (const c of controllers) c.abort();
+      fn(value);
+    };
+
+    const launch = () => {
+      if (finished) return;
+      if (next >= endpoints.length) {
+        if (running === 0) finish(reject, lastErr || new GeoError('osm'));
+        return;
+      }
+      const url = endpoints[next];
+      next += 1;
+      running += 1;
+      const ctrl = new AbortController();
+      controllers.add(ctrl);
+      const timer = setTimeout(() => ctrl.abort(), attemptTimeoutMs);
+      const hedge = setTimeout(() => {
+        if (!slowNotified) {
+          slowNotified = true;
+          onSlow?.();
+        }
+        launch();
+      }, hedgeMs);
+      let failed = false;
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: ctrl.signal,
+      })
+        .then(async (res) => {
+          if (res.status === 429 || res.status === 406) {
+            cooldownUntil.set(url, Date.now() + 30_000);
+            throw new GeoError('busy');
+          }
+          if (!res.ok) throw new GeoError(res.status >= 500 ? 'busy' : 'osm');
+          const json = await res.json();
+          if (overpassFailed(json)) throw new GeoError('busy');
+          rememberServer(url);
+          finish(resolve, json);
+        })
+        .catch((err) => {
+          failed = true;
+          if (finished) return;
+          lastErr = err instanceof GeoError ? err : new GeoError(err?.name === 'AbortError' ? 'osmTimeout' : 'osm');
+          console.warn(`Overpass: ${url} → ${lastErr.kind}`, err);
+        })
+        .finally(() => {
+          clearTimeout(timer);
+          clearTimeout(hedge);
+          controllers.delete(ctrl);
+          running -= 1;
+          if (finished) return;
+          if (failed && next < endpoints.length) launch(); // 失敗したらすぐ次のサーバーへ
+          else if (running === 0 && next >= endpoints.length) finish(reject, lastErr || new GeoError('osm'));
+        });
+    };
+
+    launch();
+  });
+}
+
+/**
+ * 周辺のお店を探す。
+ * @returns {Promise<{items:object[], cachedAt:number|null, stale?:boolean}>}
+ *   cachedAt: 端末に保存してあった結果を使ったときの、その検索の時刻
+ *   stale: つながらなかったので古い結果を使った
+ */
+export async function searchNearbyShops(pos, { radius = 500, force = false, onSlow } = {}) {
+  const cache = loadOsmCache();
+  if (!force) {
+    const cell = findCachedCell(cache, pos, radius, Date.now(), OSM_CACHE_TTL);
+    if (cell) return { items: itemsFromCell(cell, pos, radius), cachedAt: cell.at };
+  }
+  const fallback = () => {
+    const stale = findCachedCell(cache, pos, radius, Date.now(), OSM_CACHE_STALE_MAX);
+    return stale ? { items: itemsFromCell(stale, pos, radius), cachedAt: stale.at, stale: true } : null;
+  };
+  if (navigator.onLine === false) {
+    const stale = fallback();
+    if (stale) return stale;
+    throw new GeoError('offline');
+  }
+  try {
+    const json = await queryOverpass(buildOverpassQuery(pos, radius), { onSlow });
+    const items = parseOverpass(json, pos);
+    saveOsmCache(addCell(loadOsmCache(), pos, radius, items, Date.now()));
+    return { items, cachedAt: null };
   } catch (err) {
-    if (err instanceof GeoError) throw err;
-    throw new GeoError(err?.name === 'AbortError' ? 'osmTimeout' : 'osm');
-  } finally {
-    clearTimeout(timer);
+    const stale = fallback();
+    if (stale) return stale;
+    throw err;
   }
 }

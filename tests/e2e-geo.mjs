@@ -30,7 +30,9 @@ const OVERPASS_FIXTURE = {
 
 const browser = await chromium.launch();
 const errors = [];
-let overpassCalls = 0;
+let overpassCalls = 0; // 結果を返した問い合わせの数
+const hostCalls = {}; // サーバーごとの問い合わせ数
+let busyHosts = new Set(['overpass.private.coffee']); // 最初の1回は「混んでいる（429）」と返す
 
 async function newPage({ grant }) {
   const context = await browser.newContext({
@@ -42,10 +44,19 @@ async function newPage({ grant }) {
     geolocation: HERE,
     permissions: grant ? ['geolocation'] : [],
   });
-  await context.route('https://overpass-api.de/**', async (route) => {
+  const OVERPASS_HOSTS = /^(overpass\.private\.coffee|overpass-api\.de|maps\.mail\.ru)$/;
+  await context.route((url) => OVERPASS_HOSTS.test(url.hostname), async (route) => {
+    const host = new URL(route.request().url()).hostname;
+    hostCalls[host] = (hostCalls[host] || 0) + 1;
+    const cors = { 'Access-Control-Allow-Origin': '*' };
+    if (busyHosts.has(host)) {
+      busyHosts.delete(host);
+      await route.fulfill({ status: 429, contentType: 'text/plain', headers: cors, body: 'Too Many Requests' });
+      return;
+    }
     overpassCalls += 1;
     assert.match(decodeURIComponent(route.request().postData() || ''), /around:500,35\.000000,135\.000000/);
-    await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(OVERPASS_FIXTURE) });
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(OVERPASS_FIXTURE) });
   });
   const page = await context.newPage();
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
@@ -94,6 +105,8 @@ await page.selectOption('[data-ref="unit"]', 'L');
 await page.click('form [type="submit"]');
 await page.waitForSelector('.view .list a.row');
 assert.equal(overpassCalls, 1);
+// 1つ目のサーバーが混んでいた（429）ので、2つ目のサーバーが答えた
+assert.deepEqual(hostCalls, { 'overpass.private.coffee': 1, 'overpass-api.de': 1 });
 let stores = await storesInStorage();
 const aeon = stores.find((s) => s.name === 'イオン テスト店');
 assert.ok(aeon, 'イオン テスト店が登録されている');
@@ -120,6 +133,21 @@ assert.match(await text('[data-pick-store]'), /イオン テスト店\s*40m/);
 const rows2 = await page.locator('.osm-row').allInnerTexts();
 assert.equal(rows2.length, 2, '登録済みのイオンは候補から消える');
 assert.equal(overpassCalls, 1, '同じ場所ではキャッシュを使う');
+assert.match(await text('.osm-credit'), /今日探した結果/);
+
+step('アプリを開き直しても、前に探した結果を使う（問い合わせない）');
+await page.goto(BASE); // ホームから開き直す
+await page.waitForSelector('.view');
+await page.click('#tabbar [data-tab="record"]');
+await page.click('[data-act="change-store"]');
+await page.waitForSelector('.osm-row');
+assert.equal(overpassCalls, 1);
+step('「探し直す」で問い合わせ直す（さっき答えたサーバーから）');
+await page.click('[data-act="search-osm-force"]');
+await page.waitForFunction(() => document.querySelectorAll('.osm-row').length === 2 && !/探した結果/.test(document.querySelector('.osm-credit').innerText));
+assert.equal(overpassCalls, 2);
+assert.equal(hostCalls['overpass-api.de'], 2);
+assert.equal(hostCalls['overpass.private.coffee'], 1);
 await page.click('.osm-row >> text=業務スーパー テスト店');
 await page.fill('[data-ref="productQuery"]', '牛乳');
 await page.click('[data-pick-product]');
@@ -230,7 +258,8 @@ assert.match(await b.page.locator('.loc-line.is-error').innerText(), /位置情�
 await b.context.close();
 
 await browser.close();
-const unexpected = errors.filter((e) => !/User denied Geolocation/i.test(e));
+// 許可なしの位置情報エラーと、わざと返した 429 をブラウザが出すログは想定どおり
+const unexpected = errors.filter((e) => !/User denied Geolocation/i.test(e) && !/status of 429 \(Too Many Requests\)/.test(e));
 if (unexpected.length) {
   console.error('エラーが出ました:\n' + unexpected.join('\n'));
   process.exit(1);

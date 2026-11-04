@@ -98,13 +98,61 @@ export function parseOverpass(json, origin) {
       distance: origin ? distanceM(origin, { lat, lng }) : NaN,
     });
   }
-  items.sort((a, b) => a.distance - b.distance);
+  return dedupeCandidates(items);
+}
+
+// 近い順に並べて、同じ OSM の ID・同じ名前で40m以内（建物と点の二重登録など）はまとめる
+export function dedupeCandidates(items) {
+  const sorted = [...items].sort((a, b) => a.distance - b.distance);
   const result = [];
-  for (const c of items) {
+  const ids = new Set();
+  for (const c of sorted) {
+    if (ids.has(c.osmId)) continue;
     if (result.some((r) => normalizeText(r.name) === normalizeText(c.name) && distanceM(r, c) < 40)) continue;
+    ids.add(c.osmId);
     result.push(c);
   }
   return result;
+}
+
+export function mergeCandidates(a, b) {
+  return dedupeCandidates([...(a || []), ...(b || [])]);
+}
+
+// ---- Nominatim（OpenStreetMap の場所検索）。Overpass が混んでいても使える ----
+export const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
+// 1回の検索で1種類しか探せないので、よく使う種類だけ（1秒に1回まで、という利用ルール）
+export const NOMINATIM_QUERIES = ['supermarket', 'convenience store', 'chemist'];
+
+// 現在地を中心にした四角（Nominatim の viewbox: 西,北,東,南）
+export function viewboxAround({ lat, lng }, radius) {
+  const dLat = radius / 111320;
+  const dLng = radius / (111320 * Math.cos(rad(lat)));
+  return [lng - dLng, lat + dLat, lng + dLng, lat - dLat].map((v) => v.toFixed(6)).join(',');
+}
+
+// Nominatim の結果（format=jsonv2, extratags=1, namedetails=1）→ お店の候補
+export function parseNominatim(list, origin) {
+  const items = [];
+  for (const x of Array.isArray(list) ? list : []) {
+    const lat = parseFloat(x?.lat);
+    const lng = parseFloat(x?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !x.osm_type || !x.osm_id) continue;
+    const tags = { ...(x.extratags || {}), ...(x.namedetails || {}) };
+    if (!tags.name && x.name) tags.name = x.name;
+    const name = storeNameFromTags(tags);
+    if (!name) continue;
+    items.push({
+      osmId: `${x.osm_type}/${x.osm_id}`,
+      name,
+      chain: chainFromTags(tags),
+      shop: x.category === 'shop' ? x.type : '',
+      lat,
+      lng,
+      distance: origin ? distanceM(origin, { lat, lng }) : NaN,
+    });
+  }
+  return dedupeCandidates(items);
 }
 
 const nameKey = (s) => normalizeText(s).replace(/\s/g, '');
@@ -322,7 +370,7 @@ function endpointOrder(now = Date.now()) {
  * サーバーに順番に問い合わせる。返事が遅ければ hedgeMs 後に次のサーバーにも聞き、
  * 断られたり失敗したらすぐ次へ。最初に返ってきた結果を使う。
  */
-function queryOverpass(query, { hedgeMs = 4000, attemptTimeoutMs = 12_000, onSlow } = {}) {
+function queryOverpass(query, { hedgeMs = 3000, attemptTimeoutMs = 9000, onSlow } = {}) {
   const endpoints = endpointOrder();
   return new Promise((resolve, reject) => {
     let next = 0;
@@ -397,13 +445,67 @@ function queryOverpass(query, { hedgeMs = 4000, attemptTimeoutMs = 12_000, onSlo
   });
 }
 
+let nominatimPausedUntil = 0;
+
+function fetchWithTimeout(url, options, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 種類ごとに1秒あけて順番に探す。見つかるたびに onItems を呼ぶ
+async function queryNominatim(pos, radius, onItems) {
+  if (Date.now() < nominatimPausedUntil) throw new GeoError('busy');
+  const viewbox = viewboxAround(pos, radius);
+  let found = [];
+  let ok = 0;
+  let lastErr = null;
+  for (let i = 0; i < NOMINATIM_QUERIES.length; i += 1) {
+    if (i > 0) await wait(1100);
+    const params = new URLSearchParams({
+      q: NOMINATIM_QUERIES[i],
+      format: 'jsonv2',
+      limit: '40',
+      bounded: '1',
+      viewbox,
+      extratags: '1',
+      namedetails: '1',
+      'accept-language': 'ja',
+    });
+    try {
+      const res = await fetchWithTimeout(`${NOMINATIM_URL}?${params}`, {}, 10_000);
+      if (res.status === 429) {
+        nominatimPausedUntil = Date.now() + 60_000; // 断られたら1分休む
+        lastErr = new GeoError('busy');
+        break;
+      }
+      if (!res.ok) {
+        lastErr = new GeoError(res.status >= 500 ? 'busy' : 'osm');
+        continue;
+      }
+      const items = parseNominatim(await res.json(), pos).filter((c) => c.distance <= radius * 1.1);
+      found = mergeCandidates(found, items);
+      ok += 1;
+      onItems(found);
+    } catch (err) {
+      lastErr = err instanceof GeoError ? err : new GeoError(err?.name === 'AbortError' ? 'osmTimeout' : 'osm');
+      console.warn(`Nominatim: ${NOMINATIM_QUERIES[i]} → ${lastErr.kind}`, err);
+    }
+  }
+  if (!ok) throw lastErr || new GeoError('osm');
+  return found;
+}
+
 /**
- * 周辺のお店を探す。
+ * 周辺のお店を探す。Nominatim（スーパー・コンビニ・ドラッグストア）と Overpass（ほかの種類も）に同時に聞いて、
+ * 見つかった分から onPartial で知らせる。
  * @returns {Promise<{items:object[], cachedAt:number|null, stale?:boolean}>}
  *   cachedAt: 端末に保存してあった結果を使ったときの、その検索の時刻
  *   stale: つながらなかったので古い結果を使った
  */
-export async function searchNearbyShops(pos, { radius = 500, force = false, onSlow } = {}) {
+export async function searchNearbyShops(pos, { radius = 500, force = false, onSlow, onPartial } = {}) {
   const cache = loadOsmCache();
   if (!force) {
     const cell = findCachedCell(cache, pos, radius, Date.now(), OSM_CACHE_TTL);
@@ -418,14 +520,33 @@ export async function searchNearbyShops(pos, { radius = 500, force = false, onSl
     if (stale) return stale;
     throw new GeoError('offline');
   }
-  try {
-    const json = await queryOverpass(buildOverpassQuery(pos, radius), { onSlow });
-    const items = parseOverpass(json, pos);
-    saveOsmCache(addCell(loadOsmCache(), pos, radius, items, Date.now()));
-    return { items, cachedAt: null };
-  } catch (err) {
-    const stale = fallback();
-    if (stale) return stale;
-    throw err;
+
+  let merged = [];
+  let success = false;
+  const errors = [];
+  const add = (items) => {
+    merged = mergeCandidates(merged, items);
+    onPartial?.(merged);
+  };
+  await Promise.all([
+    queryOverpass(buildOverpassQuery(pos, radius), { onSlow })
+      .then((json) => {
+        add(parseOverpass(json, pos));
+        success = true;
+      })
+      .catch((err) => errors.push(err)),
+    queryNominatim(pos, radius, add)
+      .then(() => {
+        success = true;
+      })
+      .catch((err) => errors.push(err)),
+  ]);
+
+  if (success) {
+    saveOsmCache(addCell(loadOsmCache(), pos, radius, merged, Date.now()));
+    return { items: merged, cachedAt: null };
   }
+  const stale = fallback();
+  if (stale) return stale;
+  throw errors.find((e) => e?.kind === 'busy') || errors[0] || new GeoError('osm');
 }

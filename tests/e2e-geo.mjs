@@ -27,12 +27,25 @@ const OVERPASS_FIXTURE = {
     { type: 'node', id: 1004, lat: 35.0002, lon: 135.0, tags: { shop: 'convenience' } },
   ],
 };
+// Nominatim（種類ごとの検索）の応答。イオン・セブン・業務スーパーは Overpass と同じお店（同じ ID）、
+// ドラッグストアは Nominatim だけにある
+const nomi = (osmType, osmId, lat, lon, type, name, branch, brandJa) => ({
+  osm_type: osmType, osm_id: osmId, lat: String(lat), lon: String(lon), category: 'shop', type, name,
+  extratags: { branch, ...(brandJa ? { 'brand:ja': brandJa } : {}) }, namedetails: { name, 'name:ja': name },
+});
+const NOMINATIM_FIXTURE = {
+  supermarket: [nomi('way', 1001, 35.0004, 135.0, 'supermarket', 'イオン', 'テスト店', 'イオン'), nomi('node', 1003, 35.003, 135.0, 'supermarket', '業務スーパー', 'テスト店', '業務スーパー')],
+  'convenience store': [nomi('node', 1002, 35.0001, 135.0006, 'convenience', 'セブン-イレブン', 'テスト一丁目店', 'セブン-イレブン')],
+  chemist: [nomi('node', 1005, 35.0012, 135.0, 'chemist', 'テストドラッグ', '駅前店', 'テストドラッグ')],
+};
 
 const browser = await chromium.launch();
 const errors = [];
 let overpassCalls = 0; // 結果を返した問い合わせの数
 const hostCalls = {}; // サーバーごとの問い合わせ数
 let busyHosts = new Set(['overpass.private.coffee']); // 最初の1回は「混んでいる（429）」と返す
+let overpassDown = false; // true のあいだ、Overpass のサーバーはすべて 503
+let nominatimCalls = 0;
 
 async function newPage({ grant }) {
   const context = await browser.newContext({
@@ -49,6 +62,10 @@ async function newPage({ grant }) {
     const host = new URL(route.request().url()).hostname;
     hostCalls[host] = (hostCalls[host] || 0) + 1;
     const cors = { 'Access-Control-Allow-Origin': '*' };
+    if (overpassDown) {
+      await route.fulfill({ status: 503, contentType: 'text/plain', headers: cors, body: 'Service Unavailable' });
+      return;
+    }
     if (busyHosts.has(host)) {
       busyHosts.delete(host);
       await route.fulfill({ status: 429, contentType: 'text/plain', headers: cors, body: 'Too Many Requests' });
@@ -57,6 +74,16 @@ async function newPage({ grant }) {
     overpassCalls += 1;
     assert.match(decodeURIComponent(route.request().postData() || ''), /around:500,35\.000000,135\.000000/);
     await route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(OVERPASS_FIXTURE) });
+  });
+  await context.route('https://nominatim.openstreetmap.org/**', async (route) => {
+    nominatimCalls += 1;
+    const url = new URL(route.request().url());
+    assert.equal(url.searchParams.get('bounded'), '1');
+    assert.equal(url.searchParams.get('format'), 'jsonv2');
+    const [west, north, east, south] = url.searchParams.get('viewbox').split(',').map(Number);
+    assert.ok(west < 135 && east > 135 && south < 35 && north > 35, 'viewbox は現在地を囲む');
+    const body = NOMINATIM_FIXTURE[url.searchParams.get('q')] || [];
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(body) });
   });
   const page = await context.newPage();
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
@@ -79,6 +106,8 @@ const shot = async (name) => {
   await page.screenshot({ path: join(SHOTS, `${String(shotNo).padStart(2, '0')}-${name}.png`), fullPage: true });
 };
 const storesInStorage = () => page.evaluate(() => JSON.parse(localStorage.getItem('ph.v1.stores') || '[]'));
+// 周辺のお店の検索が終わるまで待つ（見つかった分から先に出るので）
+const searchDone = () => page.waitForFunction(() => document.querySelector('.osm-row') && !document.querySelector('.loc-line.is-busy'));
 
 await page.goto(BASE);
 await page.waitForSelector('.view');
@@ -88,13 +117,15 @@ await page.click('#tabbar [data-tab="record"]');
 await page.fill('[data-ref="productQuery"]', '牛乳');
 await page.click('[data-act="new-product"]');
 await page.click('[data-new-cat="卵・乳製品"]');
-await page.waitForSelector('.osm-row');
+await searchDone();
 assert.match(await text('.loc-line'), /現在地の近く（誤差 ±20m）/);
 const osmRows = await page.locator('.osm-row').allInnerTexts();
-assert.equal(osmRows.length, 3);
+assert.equal(osmRows.length, 4, 'Overpass と Nominatim の結果をまとめる（同じお店は1つ）');
 assert.match(osmRows[0], /イオン テスト店[\s\S]*スーパー[\s\S]*40m/);
 assert.match(osmRows[1], /セブン-イレブン テスト一丁目店[\s\S]*60m/);
-assert.match(osmRows[2], /業務スーパー テスト店[\s\S]*330m/);
+assert.match(osmRows[2], /テストドラッグ 駅前店[\s\S]*ドラッグストア[\s\S]*130m/);
+assert.match(osmRows[3], /業務スーパー テスト店[\s\S]*330m/);
+assert.equal(nominatimCalls, 3, 'スーパー・コンビニ・ドラッグストアを1回ずつ');
 assert.match(await text('[data-ref="store"]'), /© OpenStreetMap contributors/);
 await shot('record-osm-list');
 await page.click('.osm-row >> text=イオン テスト店');
@@ -131,7 +162,8 @@ await page.click('[data-act="change-store"]');
 await page.waitForSelector('.osm-row');
 assert.match(await text('[data-pick-store]'), /イオン テスト店\s*40m/);
 const rows2 = await page.locator('.osm-row').allInnerTexts();
-assert.equal(rows2.length, 2, '登録済みのイオンは候補から消える');
+assert.equal(rows2.length, 3, '登録済みのイオンは候補から消える');
+assert.equal(nominatimCalls, 3, '同じ場所ではキャッシュを使う（Nominatim も）');
 assert.equal(overpassCalls, 1, '同じ場所ではキャッシュを使う');
 assert.match(await text('.osm-credit'), /今日探した結果/);
 
@@ -144,10 +176,25 @@ await page.waitForSelector('.osm-row');
 assert.equal(overpassCalls, 1);
 step('「探し直す」で問い合わせ直す（さっき答えたサーバーから）');
 await page.click('[data-act="search-osm-force"]');
-await page.waitForFunction(() => document.querySelectorAll('.osm-row').length === 2 && !/探した結果/.test(document.querySelector('.osm-credit').innerText));
+await searchDone();
+assert.equal(await page.locator('.osm-row').count(), 3);
+assert.doesNotMatch(await text('.osm-credit'), /探した結果/);
 assert.equal(overpassCalls, 2);
 assert.equal(hostCalls['overpass-api.de'], 2);
 assert.equal(hostCalls['overpass.private.coffee'], 1);
+assert.equal(nominatimCalls, 6);
+
+step('Overpass のサーバーが全部止まっていても、Nominatim で見つかる');
+overpassDown = true;
+await page.click('[data-act="search-osm-force"]');
+await searchDone();
+const rowsDown = await page.locator('.osm-row').allInnerTexts();
+assert.equal(rowsDown.length, 3);
+assert.match(rowsDown.join('\n'), /テストドラッグ 駅前店/);
+assert.equal(await page.locator('[data-ref="store"] .loc-line.is-error').count(), 0, 'エラーは出ない');
+assert.equal(nominatimCalls, 9);
+overpassDown = false;
+await shot('record-overpass-down');
 await page.click('.osm-row >> text=業務スーパー テスト店');
 await page.fill('[data-ref="productQuery"]', '牛乳');
 await page.click('[data-pick-product]');
@@ -181,9 +228,9 @@ await page.click('#tabbar [data-tab="stores"]');
 await page.click('a[href="#/stores/new"]');
 await page.waitForSelector('.osm-row');
 const rows3 = await page.locator('.osm-row').allInnerTexts();
-assert.equal(rows3.length, 1);
+assert.equal(rows3.length, 2);
 await shot('store-new-osm');
-await page.click('.osm-row');
+await page.click('.osm-row >> text=セブン-イレブン テスト一丁目店');
 assert.equal(await page.inputValue('[data-ref="name"]'), 'セブン-イレブン テスト一丁目店');
 assert.equal(await page.inputValue('[data-ref="chain"]'), 'セブン-イレブン');
 assert.match(await text('[data-ref="locBox"]'), /登録済み/);
@@ -259,9 +306,9 @@ await b.context.close();
 
 await browser.close();
 // 許可なしの位置情報エラーと、わざと返した 429 をブラウザが出すログは想定どおり
-const unexpected = errors.filter((e) => !/User denied Geolocation/i.test(e) && !/status of 429 \(Too Many Requests\)/.test(e));
+const unexpected = errors.filter((e) => !/User denied Geolocation/i.test(e) && !/status of (429|503) /.test(e));
 if (unexpected.length) {
   console.error('エラーが出ました:\n' + unexpected.join('\n'));
   process.exit(1);
 }
-console.log(`\nOK（Overpass への問い合わせ ${overpassCalls}回、スクリーンショット: ${SHOTS}）`);
+console.log(`\nOK（Overpass への問い合わせ ${overpassCalls}回・Nominatim ${nominatimCalls}回、スクリーンショット: ${SHOTS}）`);

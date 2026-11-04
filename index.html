@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://overpass.private.coffee https://overpass-api.de https://maps.mail.ru; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://nominatim.openstreetmap.org https://overpass.private.coffee https://overpass-api.de https://maps.mail.ru; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <title>単価くらべ</title>
   <meta name="description" content="お店ごとの値段と量を記録して、100gあたりの値段などの単価で比べるアプリ">
   <meta name="theme-color" content="#15803d" media="(prefers-color-scheme: light)">
@@ -11,7 +11,8 @@
   <meta name="color-scheme" content="light dark">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- ステータスバーの下に画面を潜り込ませない（black-translucent だと iOS 26 が上端をぼかして暗くするため）。
+       この設定はホーム画面に追加したときに読まれるので、変えたら追加し直しが必要 -->
   <meta name="apple-mobile-web-app-title" content="単価くらべ">
   <meta name="format-detection" content="telephone=no">
   <link rel="manifest" href="manifest.webmanifest">

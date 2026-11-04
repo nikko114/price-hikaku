@@ -1,0 +1,16 @@
+{
+  "_note": "東京駅周辺の Nominatim 検索結果の一部（テスト用に抜粋）。Data © OpenStreetMap contributors, ODbL 1.0 — https://www.openstreetmap.org/copyright",
+  "results": [
+    { "osm_type": "node", "osm_id": 12995244481, "lat": "35.6856579", "lon": "139.7656919", "category": "shop", "type": "supermarket",
+      "name": "EPICERIE BONHEUR 成城石井 大手町店", "extratags": { "wheelchair": "yes" }, "namedetails": { "name": "EPICERIE BONHEUR 成城石井 大手町店" } },
+    { "osm_type": "node", "osm_id": 2065895720, "lat": "35.6823860", "lon": "139.7639798", "category": "shop", "type": "convenience",
+      "name": "セブン-イレブン", "extratags": { "branch": "新丸ビル", "brand:ja": "セブン-イレブン", "operator": "セブンイレブン・ジャパン" },
+      "namedetails": { "name": "セブン-イレブン", "brand": "7-ELEVEN", "name:ja": "セブン-イレブン" } },
+    { "osm_type": "node", "osm_id": 2365111053, "lat": "35.6817170", "lon": "139.7714550", "category": "shop", "type": "convenience",
+      "name": "ファミリーマート", "extratags": { "branch": "八重洲一丁目店", "brand:ja": "ファミリーマート" },
+      "namedetails": { "name": "ファミリーマート", "brand": "FamilyMart", "name:ja": "ファミリーマート" } },
+    { "osm_type": "node", "osm_id": 2065895673, "lat": "35.6813069", "lon": "139.7636463", "category": "shop", "type": "chemist",
+      "name": "トモズ", "extratags": { "branch": "丸の内店", "brand:ja": "トモズ", "operator": "住商ドラッグストアーズ" },
+      "namedetails": { "name": "トモズ", "brand": "トモズ", "name:ja": "トモズ" } }
+  ]
+}

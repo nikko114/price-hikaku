@@ -5,6 +5,7 @@ import {
   distanceM, fmtDistance, buildOverpassQuery, storeNameFromTags, chainFromTags, parseOverpass,
   excludeRegistered, nearbyStores, autoPick, mapsUrl, hasLocation,
   findCachedCell, itemsFromCell, addCell, overpassFailed, OSM_CACHE_TTL, OSM_CACHE_STALE_MAX, OVERPASS_ENDPOINTS,
+  parseNominatim, viewboxAround, mergeCandidates, NOMINATIM_QUERIES,
 } from '../js/geo.js';
 
 const TOKYO_STATION = { lat: 35.6812, lng: 139.7671 };
@@ -168,4 +169,40 @@ test('検索結果のキャッシュ: 150m 以内・期限内なら使い回す'
   assert.equal(Object.keys(cache).length, 40);
   const pruned = addCell(cache, here, 500, [], now + OSM_CACHE_STALE_MAX + 1000);
   assert.equal(Object.keys(pruned).length, 1);
+});
+
+const nominatim = JSON.parse(readFileSync(new URL('./fixtures/nominatim-tokyo-station.json', import.meta.url), 'utf8')).results;
+
+test('parseNominatim: 実データ（東京駅周辺）。支店名・チェーン名は extratags / namedetails から', () => {
+  const items = parseNominatim(nominatim, TOKYO_STATION);
+  assert.deepEqual(items.map((x) => x.name), [
+    'セブン-イレブン 新丸ビル',
+    'トモズ 丸の内店',
+    'ファミリーマート 八重洲一丁目店',
+    'EPICERIE BONHEUR 成城石井 大手町店',
+  ]);
+  const seven = items[0];
+  assert.equal(seven.osmId, 'node/2065895720');
+  assert.equal(seven.chain, 'セブン-イレブン');
+  assert.equal(seven.shop, 'convenience');
+  assert.ok(Math.abs(seven.distance - 311) < 3, `${seven.distance}`);
+  assert.equal(items[1].shop, 'chemist');
+  assert.equal(items[3].chain, '');
+  assert.deepEqual(parseNominatim(null, TOKYO_STATION), []);
+  assert.deepEqual(parseNominatim([{ osm_type: 'node', osm_id: 1, lat: 'x', lon: '1' }], TOKYO_STATION), []);
+});
+
+test('mergeCandidates: Overpass と Nominatim の同じお店（同じ OSM の ID）は1つに', () => {
+  const merged = mergeCandidates(parseOverpass(fixture, TOKYO_STATION), parseNominatim(nominatim, TOKYO_STATION));
+  assert.equal(merged.length, 8); // Overpass 7件 ＋ Nominatim だけにある成城石井
+  assert.equal(new Set(merged.map((x) => x.osmId)).size, 8);
+  for (let i = 1; i < merged.length; i += 1) assert.ok(merged[i - 1].distance <= merged[i].distance);
+  assert.deepEqual(mergeCandidates(null, undefined), []);
+});
+
+test('viewboxAround / Nominatim で探す種類', () => {
+  const [west, north, east, south] = viewboxAround({ lat: 35, lng: 135 }, 500).split(',').map(Number);
+  assert.ok(Math.abs(north - 35.004492) < 1e-6 && Math.abs(south - 34.995508) < 1e-6);
+  assert.ok(Math.abs(east - 135.005483) < 2e-6 && Math.abs(west - 134.994517) < 2e-6);
+  assert.deepEqual(NOMINATIM_QUERIES, ['supermarket', 'convenience store', 'chemist']);
 });

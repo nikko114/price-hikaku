@@ -50,9 +50,7 @@ export function createLocator(onChange) {
 
   async function searchOsm({ force = false } = {}) {
     if (!s.pos || s.osm.status === 'loading' || !state.settings().onlineStoreSearch) return;
-    s.osm.status = 'loading';
-    s.osm.error = null;
-    s.osm.slow = false;
+    Object.assign(s.osm, { status: 'loading', error: null, slow: false, items: [], cachedAt: null, stale: false });
     changed();
     try {
       const r = await geo.searchNearbyShops(s.pos, {
@@ -60,6 +58,11 @@ export function createLocator(onChange) {
         force,
         onSlow: () => {
           s.osm.slow = true;
+          changed();
+        },
+        // 見つかった分から先に出す
+        onPartial: (items) => {
+          s.osm.items = items;
           changed();
         },
       });
@@ -117,18 +120,22 @@ export function osmListHtml(loc, { limit = 5 } = {}) {
   if (o.status === 'idle') {
     return html`<button type="button" class="link-btn" data-act="search-osm">周辺のお店を地図データから探す</button>`;
   }
-  if (o.status === 'loading') {
-    return html`<p class="loc-line is-busy">周辺のお店を探しています…${o.slow ? html`<br><span class="loc-sub">地図データのサーバーが混んでいるので、別のサーバーにも聞いています</span>` : ''}</p>`;
-  }
+  const loading = o.status === 'loading';
+  const busyLine = loading
+    ? html`<p class="loc-line is-busy">${o.items.length ? 'ほかのお店も探しています…' : '周辺のお店を探しています…'}${
+        o.slow ? html`<br><span class="loc-sub">地図データのサーバーが混んでいるので、別のサーバーにも聞いています</span>` : ''
+      }</p>`
+    : '';
+  if (loading && !o.items.length) return busyLine;
   if (o.status === 'error') {
     return html`<p class="loc-line is-error">${geo.osmErrorMessage(o.error)} <button type="button" class="link-btn is-small" data-act="search-osm">もう一度</button></p>`;
   }
   const items = geo.excludeRegistered(o.items, state.stores());
-  const footer = html`<p class="osm-credit">地図データ © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors${
+  const footer = html`${busyLine}<p class="osm-credit">地図データ © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors${
     o.cachedAt ? ` ・ ${searchedWhen(o.cachedAt)}探した結果` : ''
-  } ・ <button type="button" class="link-btn is-small" data-act="search-osm-force">探し直す</button></p>`;
+  }${loading ? '' : html` ・ <button type="button" class="link-btn is-small" data-act="search-osm-force">探し直す</button>`}</p>`;
   const staleNote = o.stale ? html`<p class="loc-line is-error">いまはつながらないので、前に探した結果を出しています</p>` : '';
-  if (!items.length) return html`${staleNote}<p class="loc-line">近くに、まだ登録していないお店は見つかりませんでした</p>${footer}`;
+  if (!items.length) return loading ? busyLine : html`${staleNote}<p class="loc-line">近くに、まだ登録していないお店は見つかりませんでした</p>${footer}`;
   const shown = items.slice(0, o.expanded ? 20 : limit);
   return html`${staleNote}<p class="sub-label">周辺のお店（タップで登録）</p>
     <ul class="list osm-list">
